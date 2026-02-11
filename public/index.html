@@ -3,7 +3,69 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title></title>
+    <title>Event Tracker</title>
+    <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body></body>
+  <body>
+    <div class="app-root">
+      <aside id="sidebar" class="sidebar" aria-label="Primary Navigation">
+        <div class="sidebar-head">
+          <button
+            id="menuToggle"
+            class="sidebar-toggle"
+            type="button"
+            aria-label="Toggle sidebar"
+            aria-controls="sidebar"
+            aria-expanded="true"
+          >
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z" />
+            </svg>
+          </button>
+          <span class="sidebar-head-label">Menu</span>
+        </div>
+
+        <nav class="nav-list">
+          <a class="nav-item is-active" href="#" aria-current="page">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path
+                  d="M7 2v2H5a2 2 0 0 0-2 2v2h18V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7zm14 8H3v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9zm-5 4h2v2h-2v-2zm-4 0h2v2h-2v-2zm-4 0h2v2H8v-2z"
+                />
+              </svg>
+            </span>
+            <span class="nav-label">Event Tracker</span>
+          </a>
+        </nav>
+      </aside>
+
+      <div class="main-column">
+        <header class="topbar">
+          <div class="topbar-left">
+            <h1 class="page-title">Event Tracker</h1>
+          </div>
+
+          <button class="profile-button" type="button" aria-label="Sign in">
+            <span class="profile-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path
+                  d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5z"
+                />
+              </svg>
+            </span>
+            <span>Sign in</span>
+          </button>
+        </header>
+
+        <main class="content" id="main-content">
+          <section class="panel">
+            <h2>Event Tracker</h2>
+            <p>Minimal layout shell ready for event list and task interactions.</p>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
 </html>
