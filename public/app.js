@@ -5,6 +5,8 @@ const VALID_SCOPE = new Set(["upcoming", "past", "all"]);
 const AUTH_TOKEN_KEY = "authToken";
 const AUTH_USERNAME_KEY = "authUsername";
 const VALID_AUTH_MODE = new Set(["login", "signup"]);
+const THEME_KEY = "themePreference";
+const VALID_THEME_MODE = new Set(["light", "dark", "system"]);
 
 const scopeButtons = Array.from(document.querySelectorAll(".scope-btn"));
 const typeButtons = Array.from(document.querySelectorAll(".type-chip"));
@@ -25,6 +27,11 @@ const authSubtitle = document.getElementById("authSubtitle");
 const authMessage = document.getElementById("authMessage");
 const authModeSwitch = document.getElementById("authModeSwitch");
 const authLogout = document.getElementById("authLogout");
+const settingsTrigger = document.getElementById("settingsTrigger");
+const settingsOverlay = document.getElementById("settingsOverlay");
+const settingsPanel = document.getElementById("settingsPanel");
+const settingsClose = document.getElementById("settingsClose");
+const themeModeInputs = Array.from(document.querySelectorAll("input[name='themeMode']"));
 
 const eventState = {
   scope: "upcoming",
@@ -44,6 +51,15 @@ const authState = {
   isSubmitting: false
 };
 
+const settingsState = {
+  isOpen: false
+};
+
+const themeState = {
+  preference: localStorage.getItem(THEME_KEY) || "system",
+  mediaQuery: null
+};
+
 function setCollapsedState(isCollapsed) {
   document.body.classList.toggle("sidebar-collapsed", isCollapsed);
   if (menuToggle) {
@@ -55,6 +71,78 @@ function initializeSidebarState() {
   const savedState = localStorage.getItem(SIDEBAR_STATE_KEY);
   const isCollapsed = savedState === "collapsed";
   setCollapsedState(isCollapsed);
+}
+
+function syncModalLock() {
+  const shouldLock = authState.isOpen || settingsState.isOpen;
+  document.body.classList.toggle("modal-open", shouldLock);
+}
+
+function normalizeThemePreference(value) {
+  return VALID_THEME_MODE.has(value) ? value : "system";
+}
+
+function resolveTheme(preference) {
+  if (preference === "light" || preference === "dark") {
+    return preference;
+  }
+  return themeState.mediaQuery?.matches ? "dark" : "light";
+}
+
+function applyTheme() {
+  const resolved = resolveTheme(themeState.preference);
+  document.documentElement.setAttribute("data-theme", resolved);
+}
+
+function renderThemeOptions() {
+  themeModeInputs.forEach((input) => {
+    input.checked = input.value === themeState.preference;
+  });
+}
+
+function setThemePreference(preference, persist = true) {
+  const normalized = normalizeThemePreference(preference);
+  themeState.preference = normalized;
+  if (persist) {
+    localStorage.setItem(THEME_KEY, normalized);
+  }
+  applyTheme();
+  renderThemeOptions();
+}
+
+function openSettingsPanel() {
+  if (!settingsOverlay) return;
+  closeAuthPanel();
+  settingsOverlay.hidden = false;
+  settingsState.isOpen = true;
+  syncModalLock();
+  renderThemeOptions();
+}
+
+function closeSettingsPanel() {
+  if (!settingsOverlay) return;
+  settingsOverlay.hidden = true;
+  settingsState.isOpen = false;
+  syncModalLock();
+}
+
+function initializeTheme() {
+  const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  themeState.mediaQuery = mediaQuery;
+
+  setThemePreference(themeState.preference, false);
+
+  const onSystemThemeChange = () => {
+    if (themeState.preference === "system") {
+      applyTheme();
+    }
+  };
+
+  if (typeof mediaQuery.addEventListener === "function") {
+    mediaQuery.addEventListener("change", onSystemThemeChange);
+  } else if (typeof mediaQuery.addListener === "function") {
+    mediaQuery.addListener(onSystemThemeChange);
+  }
 }
 
 async function requestJson(path, options = {}) {
@@ -153,6 +241,7 @@ function setAuthMode(mode) {
 
 function openAuthPanel(mode) {
   if (!authOverlay) return;
+  closeSettingsPanel();
 
   if (mode) {
     setAuthMode(mode);
@@ -162,7 +251,7 @@ function openAuthPanel(mode) {
 
   authOverlay.hidden = false;
   authState.isOpen = true;
-  document.body.classList.add("auth-open");
+  syncModalLock();
   setTimeout(() => {
     authUsernameInput?.focus();
   }, 0);
@@ -172,7 +261,7 @@ function closeAuthPanel() {
   if (!authOverlay) return;
   authOverlay.hidden = true;
   authState.isOpen = false;
-  document.body.classList.remove("auth-open");
+  syncModalLock();
   setAuthMessage("");
 }
 
@@ -592,9 +681,42 @@ function initializeAuthUi() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && authState.isOpen) {
-      closeAuthPanel();
+    if (event.key !== "Escape") {
+      return;
     }
+    if (authState.isOpen) {
+      closeAuthPanel();
+      return;
+    }
+    if (settingsState.isOpen) {
+      closeSettingsPanel();
+    }
+  });
+}
+
+function initializeSettingsUi() {
+  if (!settingsTrigger || !settingsOverlay || !settingsPanel || !settingsClose) {
+    return;
+  }
+
+  settingsTrigger.addEventListener("click", () => {
+    openSettingsPanel();
+  });
+
+  settingsClose.addEventListener("click", () => {
+    closeSettingsPanel();
+  });
+
+  settingsOverlay.addEventListener("click", (event) => {
+    if (event.target === settingsOverlay) {
+      closeSettingsPanel();
+    }
+  });
+
+  themeModeInputs.forEach((input) => {
+    input.addEventListener("change", () => {
+      setThemePreference(input.value);
+    });
   });
 }
 
@@ -607,6 +729,8 @@ if (menuToggle) {
 }
 
 initializeSidebarState();
+initializeTheme();
 initializeAuthUi();
+initializeSettingsUi();
 initializeAuthState();
 initializeEventView();
