@@ -2,12 +2,29 @@ const menuToggle = document.getElementById("menuToggle");
 const SIDEBAR_STATE_KEY = "sidebarState";
 const LIST_PAGE_SIZE = 8;
 const VALID_SCOPE = new Set(["upcoming", "past", "all"]);
+const AUTH_TOKEN_KEY = "authToken";
+const AUTH_USERNAME_KEY = "authUsername";
+const VALID_AUTH_MODE = new Set(["login", "signup"]);
 
 const scopeButtons = Array.from(document.querySelectorAll(".scope-btn"));
 const typeButtons = Array.from(document.querySelectorAll(".type-chip"));
 const eventList = document.getElementById("eventList");
 const eventStatus = document.getElementById("eventStatus");
 const loadMoreBtn = document.getElementById("loadMoreBtn");
+const authTrigger = document.getElementById("authTrigger");
+const authTriggerLabel = document.getElementById("authTriggerLabel");
+const authOverlay = document.getElementById("authOverlay");
+const authPanel = document.getElementById("authPanel");
+const authClose = document.getElementById("authClose");
+const authForm = document.getElementById("authForm");
+const authUsernameInput = document.getElementById("authUsername");
+const authPasswordInput = document.getElementById("authPassword");
+const authSubmit = document.getElementById("authSubmit");
+const authTitle = document.getElementById("authTitle");
+const authSubtitle = document.getElementById("authSubtitle");
+const authMessage = document.getElementById("authMessage");
+const authModeSwitch = document.getElementById("authModeSwitch");
+const authLogout = document.getElementById("authLogout");
 
 const eventState = {
   scope: "upcoming",
@@ -17,6 +34,14 @@ const eventState = {
   isLoading: false,
   isLoadingMore: false,
   error: ""
+};
+
+const authState = {
+  mode: "login",
+  token: localStorage.getItem(AUTH_TOKEN_KEY) || "",
+  username: localStorage.getItem(AUTH_USERNAME_KEY) || "",
+  isOpen: false,
+  isSubmitting: false
 };
 
 function setCollapsedState(isCollapsed) {
@@ -30,6 +55,228 @@ function initializeSidebarState() {
   const savedState = localStorage.getItem(SIDEBAR_STATE_KEY);
   const isCollapsed = savedState === "collapsed";
   setCollapsedState(isCollapsed);
+}
+
+async function requestJson(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (options.withJson !== false) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (authState.token && options.withAuth !== false) {
+    headers.set("Authorization", `Bearer ${authState.token}`);
+  }
+
+  const response = await fetch(path, {
+    ...options,
+    headers
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload.error || "Request failed.";
+    throw new Error(message);
+  }
+  return payload;
+}
+
+function setAuthMessage(text, tone = "") {
+  if (!authMessage) return;
+  authMessage.textContent = text;
+  authMessage.classList.remove("error", "success");
+  if (tone) {
+    authMessage.classList.add(tone);
+  }
+}
+
+function saveAuthSession(token, username) {
+  authState.token = token || "";
+  authState.username = username || "";
+  if (authState.token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, authState.token);
+  } else {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  }
+
+  if (authState.username) {
+    localStorage.setItem(AUTH_USERNAME_KEY, authState.username);
+  } else {
+    localStorage.removeItem(AUTH_USERNAME_KEY);
+  }
+}
+
+function renderAuthTrigger() {
+  if (!authTrigger || !authTriggerLabel) return;
+
+  if (authState.username) {
+    authTriggerLabel.textContent = authState.username;
+    authTrigger.classList.add("is-authenticated");
+    authTrigger.setAttribute("aria-label", `Signed in as ${authState.username}`);
+  } else {
+    authTriggerLabel.textContent = "Sign in";
+    authTrigger.classList.remove("is-authenticated");
+    authTrigger.setAttribute("aria-label", "Sign in");
+  }
+}
+
+function renderAuthPanel() {
+  if (!authTitle || !authSubtitle || !authSubmit || !authModeSwitch || !authLogout) {
+    return;
+  }
+
+  const isLoginMode = authState.mode === "login";
+  authTitle.textContent = isLoginMode ? "Sign in" : "Create account";
+  authSubtitle.textContent = isLoginMode
+    ? "Use your account to track completed items."
+    : "Create an account to track personal progress.";
+  authSubmit.textContent = isLoginMode ? "Sign in" : "Sign up";
+  authModeSwitch.textContent = isLoginMode ? "Create account instead" : "Use existing account";
+  authModeSwitch.disabled = authState.isSubmitting;
+  authLogout.hidden = !authState.username;
+  authLogout.disabled = authState.isSubmitting;
+
+  if (authUsernameInput && !authUsernameInput.value && authState.username) {
+    authUsernameInput.value = authState.username;
+  }
+}
+
+function setAuthMode(mode) {
+  if (!VALID_AUTH_MODE.has(mode)) {
+    return;
+  }
+  authState.mode = mode;
+  if (authPasswordInput) {
+    authPasswordInput.value = "";
+    authPasswordInput.autocomplete = mode === "login" ? "current-password" : "new-password";
+  }
+  setAuthMessage("");
+  renderAuthPanel();
+}
+
+function openAuthPanel(mode) {
+  if (!authOverlay) return;
+
+  if (mode) {
+    setAuthMode(mode);
+  } else {
+    renderAuthPanel();
+  }
+
+  authOverlay.hidden = false;
+  authState.isOpen = true;
+  document.body.classList.add("auth-open");
+  setTimeout(() => {
+    authUsernameInput?.focus();
+  }, 0);
+}
+
+function closeAuthPanel() {
+  if (!authOverlay) return;
+  authOverlay.hidden = true;
+  authState.isOpen = false;
+  document.body.classList.remove("auth-open");
+  setAuthMessage("");
+}
+
+function setAuthSubmittingState(isSubmitting) {
+  authState.isSubmitting = isSubmitting;
+  if (authSubmit) authSubmit.disabled = isSubmitting;
+  if (authModeSwitch) authModeSwitch.disabled = isSubmitting;
+  if (authClose) authClose.disabled = isSubmitting;
+  if (authUsernameInput) authUsernameInput.disabled = isSubmitting;
+  if (authPasswordInput) authPasswordInput.disabled = isSubmitting;
+  if (authLogout) authLogout.disabled = isSubmitting;
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  if (!authUsernameInput || !authPasswordInput) {
+    return;
+  }
+
+  const username = authUsernameInput.value.trim();
+  const password = authPasswordInput.value;
+  if (!username || !password) {
+    setAuthMessage("Username and password are required.", "error");
+    return;
+  }
+
+  if (authState.mode === "signup" && password.length < 6) {
+    setAuthMessage("Password must be at least 6 characters.", "error");
+    return;
+  }
+
+  setAuthSubmittingState(true);
+  setAuthMessage("");
+
+  try {
+    if (authState.mode === "signup") {
+      await requestJson("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ username, password })
+      });
+      setAuthMode("login");
+      setAuthMessage("Account created. Sign in with your new credentials.", "success");
+      return;
+    }
+
+    const payload = await requestJson("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    });
+    saveAuthSession(payload.token, payload.username);
+    renderAuthTrigger();
+    setAuthMessage("Signed in successfully.", "success");
+    closeAuthPanel();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Authentication failed.";
+    setAuthMessage(message, "error");
+  } finally {
+    setAuthSubmittingState(false);
+  }
+}
+
+async function handleAuthLogout() {
+  if (!authState.username || authState.isSubmitting) {
+    return;
+  }
+
+  setAuthSubmittingState(true);
+  setAuthMessage("");
+  try {
+    await requestJson("/api/auth/logout", {
+      method: "POST",
+      body: JSON.stringify({}),
+      withJson: false
+    });
+  } catch (error) {
+    // session may already be expired; still clear local state
+  } finally {
+    saveAuthSession("", "");
+    renderAuthTrigger();
+    setAuthMode("login");
+    setAuthSubmittingState(false);
+    closeAuthPanel();
+  }
+}
+
+async function initializeAuthState() {
+  if (!authState.token) {
+    renderAuthTrigger();
+    renderAuthPanel();
+    return;
+  }
+
+  try {
+    const payload = await requestJson("/api/me", {
+      method: "GET",
+      withJson: false
+    });
+    saveAuthSession(authState.token, payload.username || authState.username);
+  } catch (error) {
+    saveAuthSession("", "");
+  }
+
+  renderAuthTrigger();
+  renderAuthPanel();
 }
 
 function formatEventType(type) {
@@ -243,12 +490,11 @@ async function fetchEvents(options = {}) {
 
   try {
     const query = buildEventsQuery(append ? eventState.nextCursor : null);
-    const response = await fetch(`/api/events?${query}`);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error || "Unable to load events.");
-    }
-
+    const payload = await requestJson(`/api/events?${query}`, {
+      method: "GET",
+      withJson: false,
+      withAuth: false
+    });
     const incomingItems = Array.isArray(payload.items) ? payload.items : [];
     eventState.items = append ? eventState.items.concat(incomingItems) : incomingItems;
     eventState.nextCursor = payload.nextCursor || null;
@@ -308,6 +554,50 @@ function initializeEventView() {
   fetchEvents();
 }
 
+function initializeAuthUi() {
+  if (
+    !authTrigger ||
+    !authOverlay ||
+    !authPanel ||
+    !authClose ||
+    !authForm ||
+    !authModeSwitch ||
+    !authLogout
+  ) {
+    return;
+  }
+
+  authTrigger.addEventListener("click", () => {
+    openAuthPanel("login");
+  });
+
+  authClose.addEventListener("click", () => {
+    closeAuthPanel();
+  });
+
+  authOverlay.addEventListener("click", (event) => {
+    if (event.target === authOverlay) {
+      closeAuthPanel();
+    }
+  });
+
+  authModeSwitch.addEventListener("click", () => {
+    const nextMode = authState.mode === "login" ? "signup" : "login";
+    setAuthMode(nextMode);
+  });
+
+  authForm.addEventListener("submit", handleAuthSubmit);
+  authLogout.addEventListener("click", () => {
+    handleAuthLogout();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && authState.isOpen) {
+      closeAuthPanel();
+    }
+  });
+}
+
 if (menuToggle) {
   menuToggle.addEventListener("click", () => {
     const isCollapsed = !document.body.classList.contains("sidebar-collapsed");
@@ -317,4 +607,6 @@ if (menuToggle) {
 }
 
 initializeSidebarState();
+initializeAuthUi();
+initializeAuthState();
 initializeEventView();

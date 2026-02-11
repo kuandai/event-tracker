@@ -20,5 +20,7 @@ ADMIN_KEY=your-secret-key npm run dev
 ```
 
 ## Notes
-- Data is stored in memory for now. Restarting the server resets everything.
+- Data is stored in SQLite at `data/event-tracker.db` by default.
+- You can override DB location with `DB_FILE=/path/to/file.db`.
 - Passwords use a placeholder SHA-256 hash. Replace with bcrypt before production.
+- Username matching is case-insensitive for login, while display casing is preserved.

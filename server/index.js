@@ -2,6 +2,7 @@ import express from "express";
 import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
+import { all as dbAll, get as dbGet, initDatabase, run as dbRun } from "./db.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -9,6 +10,7 @@ const ADMIN_KEY = process.env.ADMIN_KEY ?? "dev-admin-key";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
+const DB_FILE = process.env.DB_FILE ?? path.join(__dirname, "..", "data", "event-tracker.db");
 
 app.use(express.json());
 app.use(express.static(publicDir));
@@ -16,10 +18,11 @@ app.use(express.static(publicDir));
 const VALID_SCOPE = new Set(["upcoming", "past", "all"]);
 const VALID_STATUS = new Set(["todo", "done", "all"]);
 
-const events = [];
-
-const users = new Map();
-const sessions = new Map();
+function asyncRoute(handler) {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
+  };
+}
 
 function hashPassword(password) {
   return crypto.createHash("sha256").update(password).digest("hex");
@@ -27,32 +30,6 @@ function hashPassword(password) {
 
 function createToken() {
   return crypto.randomBytes(24).toString("hex");
-}
-
-function getUserFromRequest(req) {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!token) return null;
-  const username = sessions.get(token);
-  if (!username) return null;
-  return { username, token };
-}
-
-function requireUser(req, res, next) {
-  const session = getUserFromRequest(req);
-  if (!session) {
-    return res.status(401).json({ error: "Authentication required." });
-  }
-  req.user = session;
-  return next();
-}
-
-function requireAdmin(req, res, next) {
-  const adminKey = req.headers["x-admin-key"];
-  if (!adminKey || adminKey !== ADMIN_KEY) {
-    return res.status(403).json({ error: "Admin access required." });
-  }
-  return next();
 }
 
 function normalizeUsername(value) {
@@ -73,6 +50,10 @@ function localTodayIso() {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function nowIso() {
+  return new Date().toISOString();
 }
 
 function firstQueryValue(value) {
@@ -162,7 +143,7 @@ function parseListQuery(query, options = {}) {
     throw new Error("from cannot be greater than to.");
   }
 
-  let status = undefined;
+  let status;
   if (includeStatus) {
     status = String(firstQueryValue(query.status) || "todo").toLowerCase();
     if (!VALID_STATUS.has(status)) {
@@ -243,6 +224,15 @@ function paginate(items, cursor, limit) {
   };
 }
 
+function mapEventRow(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    type: row.type,
+    dueDate: row.due_date ?? row.dueDate
+  };
+}
+
 function toEventResponse(event) {
   return {
     id: event.id,
@@ -252,241 +242,401 @@ function toEventResponse(event) {
   };
 }
 
-function getCompletionMap(user) {
-  if (!user) {
-    return new Map();
+async function listEventsFromDb() {
+  const rows = await dbAll("SELECT id, title, type, due_date FROM events");
+  return rows.map(mapEventRow);
+}
+
+async function getCompletionMapForUser(userId) {
+  const rows = await dbAll(
+    "SELECT event_id AS eventId, completed_at AS completedAt FROM completions WHERE user_id = ?",
+    [userId]
+  );
+  const completionMap = new Map();
+  for (const row of rows) {
+    completionMap.set(String(row.eventId), row.completedAt);
+  }
+  return completionMap;
+}
+
+async function getCompletedIds(userId) {
+  const rows = await dbAll("SELECT event_id AS eventId FROM completions WHERE user_id = ? ORDER BY event_id", [
+    userId
+  ]);
+  return rows.map((row) => String(row.eventId));
+}
+
+function readBearerToken(req) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+  const token = authHeader.slice(7).trim();
+  return token || null;
+}
+
+async function getSessionForToken(token) {
+  if (!token) {
+    return null;
   }
 
-  if (user.completed instanceof Map) {
-    return user.completed;
+  const row = await dbGet(
+    `
+      SELECT
+        s.token AS token,
+        u.id AS userId,
+        u.username_display AS usernameDisplay,
+        u.username_normalized AS usernameNormalized
+      FROM sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.token = ?
+    `,
+    [token]
+  );
+
+  if (!row) {
+    return null;
   }
 
-  if (user.completed instanceof Set) {
-    const converted = new Map();
-    for (const eventId of user.completed) {
-      converted.set(String(eventId), null);
-    }
-    user.completed = converted;
-    return user.completed;
+  return {
+    token: row.token,
+    userId: row.userId,
+    usernameDisplay: row.usernameDisplay,
+    usernameNormalized: row.usernameNormalized
+  };
+}
+
+const requireUser = asyncRoute(async (req, res, next) => {
+  const token = readBearerToken(req);
+  const session = await getSessionForToken(token);
+  if (!session) {
+    return res.status(401).json({ error: "Authentication required." });
   }
 
-  user.completed = new Map();
-  return user.completed;
+  req.user = session;
+  return next();
+});
+
+function requireAdmin(req, res, next) {
+  const adminKey = req.headers["x-admin-key"];
+  if (!adminKey || adminKey !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Admin access required." });
+  }
+  return next();
 }
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-app.get("/api/events", (req, res) => {
-  let query;
-  try {
-    query = parseListQuery(req.query);
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
-  }
-
-  const filtered = filterAndSortEvents(events, query);
-
-  let paged;
-  try {
-    paged = paginate(filtered, query.cursor, query.limit);
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
-  }
-
-  return res.json({
-    items: paged.items.map(toEventResponse),
-    nextCursor: paged.nextCursor,
-    meta: {
-      scope: query.scope,
-      limit: query.limit
+app.get(
+  "/api/events",
+  asyncRoute(async (req, res) => {
+    let query;
+    try {
+      query = parseListQuery(req.query);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
     }
-  });
-});
 
-app.post("/api/auth/register", (req, res) => {
-  const username = normalizeUsername(req.body?.username);
-  const password = String(req.body?.password || "");
+    const dbEvents = await listEventsFromDb();
+    const filtered = filterAndSortEvents(dbEvents, query);
 
-  if (!username || password.length < 6) {
-    return res.status(400).json({ error: "Username and 6+ character password required." });
-  }
-
-  if (users.has(username)) {
-    return res.status(409).json({ error: "User already exists." });
-  }
-
-  users.set(username, {
-    passwordHash: hashPassword(password),
-    completed: new Map()
-  });
-
-  return res.status(201).json({ ok: true });
-});
-
-app.post("/api/auth/login", (req, res) => {
-  const username = normalizeUsername(req.body?.username);
-  const password = String(req.body?.password || "");
-  const user = users.get(username);
-
-  if (!user || user.passwordHash !== hashPassword(password)) {
-    return res.status(401).json({ error: "Invalid credentials." });
-  }
-
-  const token = createToken();
-  sessions.set(token, username);
-
-  return res.json({ token, username });
-});
-
-app.post("/api/auth/logout", requireUser, (req, res) => {
-  sessions.delete(req.user.token);
-  res.json({ ok: true });
-});
-
-app.get("/api/me", requireUser, (req, res) => {
-  const user = users.get(req.user.username);
-  const completed = user ? Array.from(getCompletionMap(user).keys()) : [];
-  res.json({ username: req.user.username, completed });
-});
-
-app.get("/api/me/events", requireUser, (req, res) => {
-  const user = users.get(req.user.username);
-  if (!user) {
-    return res.status(401).json({ error: "Authentication required." });
-  }
-
-  let query;
-  try {
-    query = parseListQuery(req.query, { includeStatus: true });
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
-  }
-
-  const completionMap = getCompletionMap(user);
-  let filtered = filterAndSortEvents(events, query);
-
-  if (query.status === "todo") {
-    filtered = filtered.filter((event) => !completionMap.has(event.id));
-  } else if (query.status === "done") {
-    filtered = filtered.filter((event) => completionMap.has(event.id));
-  }
-
-  let paged;
-  try {
-    paged = paginate(filtered, query.cursor, query.limit);
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
-  }
-
-  return res.json({
-    items: paged.items.map((event) => ({
-      ...toEventResponse(event),
-      isCompleted: completionMap.has(event.id),
-      completedAt: completionMap.get(event.id) ?? null
-    })),
-    nextCursor: paged.nextCursor,
-    meta: {
-      status: query.status,
-      scope: query.scope,
-      limit: query.limit
+    let paged;
+    try {
+      paged = paginate(filtered, query.cursor, query.limit);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
     }
-  });
-});
 
-app.post("/api/me/toggle", requireUser, (req, res) => {
-  const eventId = String(req.body?.eventId || "");
-  const user = users.get(req.user.username);
+    return res.json({
+      items: paged.items.map(toEventResponse),
+      nextCursor: paged.nextCursor,
+      meta: {
+        scope: query.scope,
+        limit: query.limit
+      }
+    });
+  })
+);
 
-  if (!eventId || !user) {
-    return res.status(400).json({ error: "Event required." });
-  }
+app.post(
+  "/api/auth/register",
+  asyncRoute(async (req, res) => {
+    const usernameDisplay = String(req.body?.username || "").trim();
+    const usernameNormalized = normalizeUsername(usernameDisplay);
+    const password = String(req.body?.password || "");
 
-  const eventExists = events.some((event) => event.id === eventId);
-  if (!eventExists) {
-    return res.status(404).json({ error: "Event not found." });
-  }
-
-  const completionMap = getCompletionMap(user);
-  if (completionMap.has(eventId)) {
-    completionMap.delete(eventId);
-  } else {
-    completionMap.set(eventId, new Date().toISOString());
-  }
-
-  return res.json({ completed: Array.from(completionMap.keys()) });
-});
-
-app.post("/api/admin/events", requireAdmin, (req, res) => {
-  const title = String(req.body?.title || "").trim();
-  const type = normalizeEventType(req.body?.type);
-  const dueDate = String(req.body?.dueDate || "").trim();
-
-  if (!title || !type || !isIsoDate(dueDate)) {
-    return res.status(400).json({ error: "Title, type, and dueDate (YYYY-MM-DD) required." });
-  }
-
-  const newEvent = {
-    id: `evt_${crypto.randomBytes(4).toString("hex")}`,
-    title,
-    type,
-    dueDate
-  };
-
-  events.push(newEvent);
-  return res.status(201).json({ event: newEvent });
-});
-
-app.patch("/api/admin/events/:id", requireAdmin, (req, res) => {
-  const event = events.find((item) => item.id === req.params.id);
-  if (!event) {
-    return res.status(404).json({ error: "Event not found." });
-  }
-
-  const title = req.body?.title;
-  const type = req.body?.type;
-  const dueDate = req.body?.dueDate;
-
-  if (title !== undefined) {
-    const normalizedTitle = String(title).trim();
-    if (!normalizedTitle) {
-      return res.status(400).json({ error: "title cannot be empty." });
+    if (!usernameDisplay || password.length < 6) {
+      return res.status(400).json({ error: "Username and 6+ character password required." });
     }
-    event.title = normalizedTitle;
-  }
-  if (type !== undefined) {
-    const normalizedType = normalizeEventType(type);
-    if (!normalizedType) {
-      return res.status(400).json({ error: "type cannot be empty." });
+
+    try {
+      await dbRun(
+        `
+          INSERT INTO users (username_display, username_normalized, password_hash, created_at)
+          VALUES (?, ?, ?, ?)
+        `,
+        [usernameDisplay, usernameNormalized, hashPassword(password), nowIso()]
+      );
+    } catch (error) {
+      if (error.code === "SQLITE_CONSTRAINT") {
+        return res.status(409).json({ error: "User already exists." });
+      }
+      throw error;
     }
-    event.type = normalizedType;
-  }
-  if (dueDate !== undefined) {
-    const normalizedDueDate = String(dueDate).trim();
-    if (!isIsoDate(normalizedDueDate)) {
-      return res.status(400).json({ error: "dueDate must use YYYY-MM-DD." });
+
+    return res.status(201).json({ ok: true });
+  })
+);
+
+app.post(
+  "/api/auth/login",
+  asyncRoute(async (req, res) => {
+    const usernameInput = String(req.body?.username || "").trim();
+    const usernameNormalized = normalizeUsername(usernameInput);
+    const password = String(req.body?.password || "");
+
+    const user = await dbGet(
+      `
+        SELECT id, username_display AS usernameDisplay, password_hash AS passwordHash
+        FROM users
+        WHERE username_normalized = ?
+      `,
+      [usernameNormalized]
+    );
+
+    if (!user || user.passwordHash !== hashPassword(password)) {
+      return res.status(401).json({ error: "Invalid credentials." });
     }
-    event.dueDate = normalizedDueDate;
-  }
 
-  return res.json({ event });
-});
+    const token = createToken();
+    await dbRun("INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)", [
+      token,
+      user.id,
+      nowIso()
+    ]);
 
-app.delete("/api/admin/events/:id", requireAdmin, (req, res) => {
-  const index = events.findIndex((item) => item.id === req.params.id);
-  if (index === -1) {
-    return res.status(404).json({ error: "Event not found." });
-  }
+    return res.json({ token, username: user.usernameDisplay });
+  })
+);
 
-  const [removed] = events.splice(index, 1);
-  return res.json({ removed });
-});
+app.post(
+  "/api/auth/logout",
+  requireUser,
+  asyncRoute(async (req, res) => {
+    await dbRun("DELETE FROM sessions WHERE token = ?", [req.user.token]);
+    return res.json({ ok: true });
+  })
+);
+
+app.get(
+  "/api/me",
+  requireUser,
+  asyncRoute(async (req, res) => {
+    const completed = await getCompletedIds(req.user.userId);
+    return res.json({ username: req.user.usernameDisplay, completed });
+  })
+);
+
+app.get(
+  "/api/me/events",
+  requireUser,
+  asyncRoute(async (req, res) => {
+    let query;
+    try {
+      query = parseListQuery(req.query, { includeStatus: true });
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    const completionMap = await getCompletionMapForUser(req.user.userId);
+    let filtered = filterAndSortEvents(await listEventsFromDb(), query);
+
+    if (query.status === "todo") {
+      filtered = filtered.filter((event) => !completionMap.has(event.id));
+    } else if (query.status === "done") {
+      filtered = filtered.filter((event) => completionMap.has(event.id));
+    }
+
+    let paged;
+    try {
+      paged = paginate(filtered, query.cursor, query.limit);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.json({
+      items: paged.items.map((event) => ({
+        ...toEventResponse(event),
+        isCompleted: completionMap.has(event.id),
+        completedAt: completionMap.get(event.id) ?? null
+      })),
+      nextCursor: paged.nextCursor,
+      meta: {
+        status: query.status,
+        scope: query.scope,
+        limit: query.limit
+      }
+    });
+  })
+);
+
+app.post(
+  "/api/me/toggle",
+  requireUser,
+  asyncRoute(async (req, res) => {
+    const eventId = String(req.body?.eventId || "").trim();
+    if (!eventId) {
+      return res.status(400).json({ error: "Event required." });
+    }
+
+    const event = await dbGet("SELECT id FROM events WHERE id = ?", [eventId]);
+    if (!event) {
+      return res.status(404).json({ error: "Event not found." });
+    }
+
+    const existing = await dbGet(
+      "SELECT completed_at AS completedAt FROM completions WHERE user_id = ? AND event_id = ?",
+      [req.user.userId, eventId]
+    );
+
+    if (existing) {
+      await dbRun("DELETE FROM completions WHERE user_id = ? AND event_id = ?", [req.user.userId, eventId]);
+    } else {
+      await dbRun("INSERT INTO completions (user_id, event_id, completed_at) VALUES (?, ?, ?)", [
+        req.user.userId,
+        eventId,
+        nowIso()
+      ]);
+    }
+
+    const completed = await getCompletedIds(req.user.userId);
+    return res.json({ completed });
+  })
+);
+
+app.post(
+  "/api/admin/events",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const title = String(req.body?.title || "").trim();
+    const type = normalizeEventType(req.body?.type);
+    const dueDate = String(req.body?.dueDate || "").trim();
+
+    if (!title || !type || !isIsoDate(dueDate)) {
+      return res.status(400).json({ error: "Title, type, and dueDate (YYYY-MM-DD) required." });
+    }
+
+    const event = {
+      id: `evt_${crypto.randomBytes(4).toString("hex")}`,
+      title,
+      type,
+      dueDate
+    };
+
+    const timestamp = nowIso();
+    await dbRun(
+      `
+        INSERT INTO events (id, title, type, due_date, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      [event.id, event.title, event.type, event.dueDate, timestamp, timestamp]
+    );
+
+    return res.status(201).json({ event });
+  })
+);
+
+app.patch(
+  "/api/admin/events/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const current = await dbGet("SELECT id, title, type, due_date FROM events WHERE id = ?", [req.params.id]);
+    if (!current) {
+      return res.status(404).json({ error: "Event not found." });
+    }
+
+    const updates = [];
+    const params = [];
+
+    if (req.body?.title !== undefined) {
+      const title = String(req.body.title).trim();
+      if (!title) {
+        return res.status(400).json({ error: "title cannot be empty." });
+      }
+      updates.push("title = ?");
+      params.push(title);
+    }
+
+    if (req.body?.type !== undefined) {
+      const type = normalizeEventType(req.body.type);
+      if (!type) {
+        return res.status(400).json({ error: "type cannot be empty." });
+      }
+      updates.push("type = ?");
+      params.push(type);
+    }
+
+    if (req.body?.dueDate !== undefined) {
+      const dueDate = String(req.body.dueDate).trim();
+      if (!isIsoDate(dueDate)) {
+        return res.status(400).json({ error: "dueDate must use YYYY-MM-DD." });
+      }
+      updates.push("due_date = ?");
+      params.push(dueDate);
+    }
+
+    if (updates.length > 0) {
+      updates.push("updated_at = ?");
+      params.push(nowIso());
+      params.push(req.params.id);
+      await dbRun(`UPDATE events SET ${updates.join(", ")} WHERE id = ?`, params);
+    }
+
+    const updated = await dbGet("SELECT id, title, type, due_date FROM events WHERE id = ?", [req.params.id]);
+    return res.json({ event: mapEventRow(updated) });
+  })
+);
+
+app.delete(
+  "/api/admin/events/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const existing = await dbGet("SELECT id, title, type, due_date FROM events WHERE id = ?", [req.params.id]);
+    if (!existing) {
+      return res.status(404).json({ error: "Event not found." });
+    }
+
+    await dbRun("DELETE FROM events WHERE id = ?", [req.params.id]);
+    return res.json({ removed: mapEventRow(existing) });
+  })
+);
 
 app.get("*", (req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
-app.listen(PORT, () => {
-  console.log(`Event tracker running on http://localhost:${PORT}`);
+app.use((error, req, res, next) => {
+  console.error(error);
+  if (res.headersSent) {
+    return next(error);
+  }
+  if (req.path.startsWith("/api/")) {
+    return res.status(500).json({ error: "Internal server error." });
+  }
+  return res.status(500).send("Internal server error.");
+});
+
+async function start() {
+  await initDatabase(DB_FILE);
+  app.listen(PORT, () => {
+    console.log(`Event tracker running on http://localhost:${PORT}`);
+    console.log(`Using SQLite database at ${DB_FILE}`);
+  });
+}
+
+start().catch((error) => {
+  console.error("Failed to start server", error);
+  process.exit(1);
 });
