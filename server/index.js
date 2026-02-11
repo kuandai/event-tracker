@@ -16,26 +16,7 @@ app.use(express.static(publicDir));
 const VALID_SCOPE = new Set(["upcoming", "past", "all"]);
 const VALID_STATUS = new Set(["todo", "done", "all"]);
 
-const events = [
-  {
-    id: "evt_001",
-    title: "Week 2 Homework",
-    type: "homework",
-    dueDate: "2026-02-18"
-  },
-  {
-    id: "evt_002",
-    title: "Quiz 1",
-    type: "quiz",
-    dueDate: "2026-02-20"
-  },
-  {
-    id: "evt_003",
-    title: "Project Proposal",
-    type: "assignment",
-    dueDate: "2026-02-25"
-  }
-];
+const events = [];
 
 const users = new Map();
 const sessions = new Map();

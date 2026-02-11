@@ -58,9 +58,37 @@
         </header>
 
         <main class="content" id="main-content">
-          <section class="panel">
-            <h2>Event Tracker</h2>
-            <p>Minimal layout shell ready for event list and task interactions.</p>
+          <section class="panel event-view" id="eventView">
+            <header class="event-view-head">
+              <div>
+                <h2 class="event-view-title">Events</h2>
+                <p class="event-view-subtitle">Browse upcoming and past organization activities.</p>
+              </div>
+
+              <div class="scope-toggle" role="group" aria-label="Event scope">
+                <button class="scope-btn is-active" data-scope="upcoming" type="button">Upcoming</button>
+                <button class="scope-btn" data-scope="past" type="button">Past</button>
+                <button class="scope-btn" data-scope="all" type="button">All</button>
+              </div>
+            </header>
+
+            <section class="filter-group" aria-label="Event types">
+              <p class="filter-label">Type</p>
+              <div class="type-filter-row">
+                <button class="type-chip" data-type="homework" type="button">Homework</button>
+                <button class="type-chip" data-type="quiz" type="button">Quiz</button>
+                <button class="type-chip" data-type="assignment" type="button">Assignment</button>
+                <button class="type-chip" data-type="other" type="button">Other</button>
+              </div>
+            </section>
+
+            <p class="event-status" id="eventStatus" role="status" aria-live="polite"></p>
+
+            <ul class="event-list" id="eventList" aria-label="Event list"></ul>
+
+            <div class="event-actions">
+              <button class="load-more-btn" id="loadMoreBtn" type="button">Load more</button>
+            </div>
           </section>
         </main>
       </div>
