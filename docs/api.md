@@ -70,9 +70,13 @@ Body:
 ```json
 { "username": "alice", "password": "password123" }
 ```
+Notes:
+- If no admin exists yet, this registration returns `role: "admin"`.
+- Once at least one admin exists, new registrations return `role: "user"`.
+
 Response: `201 Created`
 ```json
-{ "ok": true }
+{ "ok": true, "role": "user" }
 ```
 
 ### `POST /auth/login`
@@ -82,7 +86,7 @@ Body:
 ```
 Response:
 ```json
-{ "token": "<token>", "username": "alice" }
+{ "token": "<token>", "username": "alice", "role": "admin" }
 ```
 
 ### `POST /auth/logout`
@@ -96,7 +100,7 @@ Response:
 ### `GET /me`
 Response:
 ```json
-{ "username": "alice", "completed": ["evt_001"] }
+{ "username": "alice", "role": "admin", "completed": ["evt_001"] }
 ```
 
 ### `GET /me/events`
@@ -143,7 +147,7 @@ Response:
 
 ## Admin Routes
 
-Admin auth (v0): header `x-admin-key: <key>`
+Admin auth: bearer token for an authenticated user with `role: "admin"`.
 
 ### `POST /admin/events`
 Body:

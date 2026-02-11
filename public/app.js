@@ -4,7 +4,9 @@ const LIST_PAGE_SIZE = 8;
 const VALID_SCOPE = new Set(["upcoming", "past", "all"]);
 const AUTH_TOKEN_KEY = "authToken";
 const AUTH_USERNAME_KEY = "authUsername";
+const AUTH_ROLE_KEY = "authRole";
 const VALID_AUTH_MODE = new Set(["login", "signup"]);
+const VALID_USER_ROLE = new Set(["admin", "user"]);
 const THEME_KEY = "themePreference";
 const VALID_THEME_MODE = new Set(["light", "dark", "system"]);
 
@@ -13,6 +15,7 @@ const typeButtons = Array.from(document.querySelectorAll(".type-chip"));
 const eventList = document.getElementById("eventList");
 const eventStatus = document.getElementById("eventStatus");
 const loadMoreBtn = document.getElementById("loadMoreBtn");
+const managementNavItem = document.getElementById("managementNavItem");
 const authTrigger = document.getElementById("authTrigger");
 const authTriggerLabel = document.getElementById("authTriggerLabel");
 const authOverlay = document.getElementById("authOverlay");
@@ -26,7 +29,11 @@ const authTitle = document.getElementById("authTitle");
 const authSubtitle = document.getElementById("authSubtitle");
 const authMessage = document.getElementById("authMessage");
 const authModeSwitch = document.getElementById("authModeSwitch");
-const authLogout = document.getElementById("authLogout");
+const profileMenuOverlay = document.getElementById("profileMenuOverlay");
+const profileMenuPanel = document.getElementById("profileMenuPanel");
+const profileMenuUsername = document.getElementById("profileMenuUsername");
+const profileMenuRole = document.getElementById("profileMenuRole");
+const profileSignOutBtn = document.getElementById("profileSignOutBtn");
 const settingsTrigger = document.getElementById("settingsTrigger");
 const settingsOverlay = document.getElementById("settingsOverlay");
 const settingsPanel = document.getElementById("settingsPanel");
@@ -47,8 +54,13 @@ const authState = {
   mode: "login",
   token: localStorage.getItem(AUTH_TOKEN_KEY) || "",
   username: localStorage.getItem(AUTH_USERNAME_KEY) || "",
+  role: normalizeAuthRole(localStorage.getItem(AUTH_ROLE_KEY) || ""),
   isOpen: false,
   isSubmitting: false
+};
+
+const profileMenuState = {
+  isOpen: false
 };
 
 const settingsState = {
@@ -74,8 +86,12 @@ function initializeSidebarState() {
 }
 
 function syncModalLock() {
-  const shouldLock = authState.isOpen || settingsState.isOpen;
+  const shouldLock = authState.isOpen || settingsState.isOpen || profileMenuState.isOpen;
   document.body.classList.toggle("modal-open", shouldLock);
+}
+
+function normalizeAuthRole(value) {
+  return VALID_USER_ROLE.has(value) ? value : "user";
 }
 
 function normalizeThemePreference(value) {
@@ -113,6 +129,7 @@ function setThemePreference(preference, persist = true) {
 function openSettingsPanel() {
   if (!settingsOverlay) return;
   closeAuthPanel();
+  closeProfileMenu();
   settingsOverlay.hidden = false;
   settingsState.isOpen = true;
   syncModalLock();
@@ -175,9 +192,10 @@ function setAuthMessage(text, tone = "") {
   }
 }
 
-function saveAuthSession(token, username) {
+function saveAuthSession(token, username, role = "user") {
   authState.token = token || "";
   authState.username = username || "";
+  authState.role = normalizeAuthRole(role);
   if (authState.token) {
     localStorage.setItem(AUTH_TOKEN_KEY, authState.token);
   } else {
@@ -189,6 +207,12 @@ function saveAuthSession(token, username) {
   } else {
     localStorage.removeItem(AUTH_USERNAME_KEY);
   }
+
+  if (authState.token && authState.username) {
+    localStorage.setItem(AUTH_ROLE_KEY, authState.role);
+  } else {
+    localStorage.removeItem(AUTH_ROLE_KEY);
+  }
 }
 
 function renderAuthTrigger() {
@@ -197,16 +221,20 @@ function renderAuthTrigger() {
   if (authState.username) {
     authTriggerLabel.textContent = authState.username;
     authTrigger.classList.add("is-authenticated");
-    authTrigger.setAttribute("aria-label", `Signed in as ${authState.username}`);
+    authTrigger.setAttribute("aria-label", `Open profile menu for ${authState.username}`);
+    authTrigger.setAttribute("aria-haspopup", "menu");
+    authTrigger.setAttribute("aria-expanded", String(profileMenuState.isOpen));
   } else {
     authTriggerLabel.textContent = "Sign in";
     authTrigger.classList.remove("is-authenticated");
     authTrigger.setAttribute("aria-label", "Sign in");
+    authTrigger.setAttribute("aria-haspopup", "dialog");
+    authTrigger.setAttribute("aria-expanded", "false");
   }
 }
 
 function renderAuthPanel() {
-  if (!authTitle || !authSubtitle || !authSubmit || !authModeSwitch || !authLogout) {
+  if (!authTitle || !authSubtitle || !authSubmit || !authModeSwitch) {
     return;
   }
 
@@ -218,12 +246,21 @@ function renderAuthPanel() {
   authSubmit.textContent = isLoginMode ? "Sign in" : "Sign up";
   authModeSwitch.textContent = isLoginMode ? "Create account instead" : "Use existing account";
   authModeSwitch.disabled = authState.isSubmitting;
-  authLogout.hidden = !authState.username;
-  authLogout.disabled = authState.isSubmitting;
 
   if (authUsernameInput && !authUsernameInput.value && authState.username) {
     authUsernameInput.value = authState.username;
   }
+}
+
+function renderProfileMenu() {
+  if (!profileMenuUsername || !profileMenuRole) return;
+  profileMenuUsername.textContent = authState.username || "";
+  profileMenuRole.textContent = authState.role === "admin" ? "Admin" : "User";
+}
+
+function renderManagementNav() {
+  if (!managementNavItem) return;
+  managementNavItem.hidden = !authState.username || authState.role !== "admin";
 }
 
 function setAuthMode(mode) {
@@ -242,6 +279,7 @@ function setAuthMode(mode) {
 function openAuthPanel(mode) {
   if (!authOverlay) return;
   closeSettingsPanel();
+  closeProfileMenu();
 
   if (mode) {
     setAuthMode(mode);
@@ -265,6 +303,25 @@ function closeAuthPanel() {
   setAuthMessage("");
 }
 
+function openProfileMenu() {
+  if (!profileMenuOverlay || !authState.username) return;
+  closeAuthPanel();
+  closeSettingsPanel();
+  renderProfileMenu();
+  profileMenuOverlay.hidden = false;
+  profileMenuState.isOpen = true;
+  syncModalLock();
+  renderAuthTrigger();
+}
+
+function closeProfileMenu() {
+  if (!profileMenuOverlay) return;
+  profileMenuOverlay.hidden = true;
+  profileMenuState.isOpen = false;
+  syncModalLock();
+  renderAuthTrigger();
+}
+
 function setAuthSubmittingState(isSubmitting) {
   authState.isSubmitting = isSubmitting;
   if (authSubmit) authSubmit.disabled = isSubmitting;
@@ -272,7 +329,7 @@ function setAuthSubmittingState(isSubmitting) {
   if (authClose) authClose.disabled = isSubmitting;
   if (authUsernameInput) authUsernameInput.disabled = isSubmitting;
   if (authPasswordInput) authPasswordInput.disabled = isSubmitting;
-  if (authLogout) authLogout.disabled = isSubmitting;
+  if (profileSignOutBtn) profileSignOutBtn.disabled = isSubmitting;
 }
 
 async function handleAuthSubmit(event) {
@@ -311,8 +368,10 @@ async function handleAuthSubmit(event) {
       method: "POST",
       body: JSON.stringify({ username, password })
     });
-    saveAuthSession(payload.token, payload.username);
+    saveAuthSession(payload.token, payload.username, payload.role);
     renderAuthTrigger();
+    renderProfileMenu();
+    renderManagementNav();
     setAuthMessage("Signed in successfully.", "success");
     closeAuthPanel();
   } catch (error) {
@@ -339,18 +398,24 @@ async function handleAuthLogout() {
   } catch (error) {
     // session may already be expired; still clear local state
   } finally {
-    saveAuthSession("", "");
+    saveAuthSession("", "", "user");
     renderAuthTrigger();
+    renderProfileMenu();
+    renderManagementNav();
     setAuthMode("login");
     setAuthSubmittingState(false);
     closeAuthPanel();
+    closeProfileMenu();
   }
 }
 
 async function initializeAuthState() {
   if (!authState.token) {
+    saveAuthSession("", "", "user");
     renderAuthTrigger();
     renderAuthPanel();
+    renderProfileMenu();
+    renderManagementNav();
     return;
   }
 
@@ -359,13 +424,15 @@ async function initializeAuthState() {
       method: "GET",
       withJson: false
     });
-    saveAuthSession(authState.token, payload.username || authState.username);
+    saveAuthSession(authState.token, payload.username || authState.username, payload.role || authState.role);
   } catch (error) {
-    saveAuthSession("", "");
+    saveAuthSession("", "", "user");
   }
 
   renderAuthTrigger();
   renderAuthPanel();
+  renderProfileMenu();
+  renderManagementNav();
 }
 
 function formatEventType(type) {
@@ -644,19 +711,19 @@ function initializeEventView() {
 }
 
 function initializeAuthUi() {
-  if (
-    !authTrigger ||
-    !authOverlay ||
-    !authPanel ||
-    !authClose ||
-    !authForm ||
-    !authModeSwitch ||
-    !authLogout
-  ) {
+  if (!authTrigger || !authOverlay || !authPanel || !authClose || !authForm || !authModeSwitch) {
     return;
   }
 
   authTrigger.addEventListener("click", () => {
+    if (authState.username) {
+      if (profileMenuState.isOpen) {
+        closeProfileMenu();
+      } else {
+        openProfileMenu();
+      }
+      return;
+    }
     openAuthPanel("login");
   });
 
@@ -676,9 +743,6 @@ function initializeAuthUi() {
   });
 
   authForm.addEventListener("submit", handleAuthSubmit);
-  authLogout.addEventListener("click", () => {
-    handleAuthLogout();
-  });
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") {
@@ -688,9 +752,29 @@ function initializeAuthUi() {
       closeAuthPanel();
       return;
     }
+    if (profileMenuState.isOpen) {
+      closeProfileMenu();
+      return;
+    }
     if (settingsState.isOpen) {
       closeSettingsPanel();
     }
+  });
+}
+
+function initializeProfileMenuUi() {
+  if (!profileMenuOverlay || !profileMenuPanel || !profileSignOutBtn) {
+    return;
+  }
+
+  profileMenuOverlay.addEventListener("click", (event) => {
+    if (event.target === profileMenuOverlay) {
+      closeProfileMenu();
+    }
+  });
+
+  profileSignOutBtn.addEventListener("click", () => {
+    handleAuthLogout();
   });
 }
 
@@ -731,6 +815,7 @@ if (menuToggle) {
 initializeSidebarState();
 initializeTheme();
 initializeAuthUi();
+initializeProfileMenuUi();
 initializeSettingsUi();
 initializeAuthState();
 initializeEventView();

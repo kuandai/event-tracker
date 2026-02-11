@@ -6,7 +6,6 @@ import { all as dbAll, get as dbGet, initDatabase, run as dbRun } from "./db.js"
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
-const ADMIN_KEY = process.env.ADMIN_KEY ?? "dev-admin-key";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
@@ -17,6 +16,7 @@ app.use(express.static(publicDir));
 
 const VALID_SCOPE = new Set(["upcoming", "past", "all"]);
 const VALID_STATUS = new Set(["todo", "done", "all"]);
+const VALID_USER_ROLE = new Set(["admin", "user"]);
 
 function asyncRoute(handler) {
   return (req, res, next) => {
@@ -38,6 +38,11 @@ function normalizeUsername(value) {
 
 function normalizeEventType(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  return VALID_USER_ROLE.has(role) ? role : "user";
 }
 
 function isIsoDate(value) {
@@ -286,7 +291,8 @@ async function getSessionForToken(token) {
         s.token AS token,
         u.id AS userId,
         u.username_display AS usernameDisplay,
-        u.username_normalized AS usernameNormalized
+        u.username_normalized AS usernameNormalized,
+        u.role AS role
       FROM sessions s
       JOIN users u ON u.id = s.user_id
       WHERE s.token = ?
@@ -302,7 +308,8 @@ async function getSessionForToken(token) {
     token: row.token,
     userId: row.userId,
     usernameDisplay: row.usernameDisplay,
-    usernameNormalized: row.usernameNormalized
+    usernameNormalized: row.usernameNormalized,
+    role: normalizeRole(row.role)
   };
 }
 
@@ -318,8 +325,7 @@ const requireUser = asyncRoute(async (req, res, next) => {
 });
 
 function requireAdmin(req, res, next) {
-  const adminKey = req.headers["x-admin-key"];
-  if (!adminKey || adminKey !== ADMIN_KEY) {
+  if (!req.user || req.user.role !== "admin") {
     return res.status(403).json({ error: "Admin access required." });
   }
   return next();
@@ -371,13 +377,16 @@ app.post(
       return res.status(400).json({ error: "Username and 6+ character password required." });
     }
 
+    const adminCountRow = await dbGet("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'");
+    const role = Number(adminCountRow?.count || 0) === 0 ? "admin" : "user";
+
     try {
       await dbRun(
         `
-          INSERT INTO users (username_display, username_normalized, password_hash, created_at)
-          VALUES (?, ?, ?, ?)
+          INSERT INTO users (username_display, username_normalized, password_hash, role, created_at)
+          VALUES (?, ?, ?, ?, ?)
         `,
-        [usernameDisplay, usernameNormalized, hashPassword(password), nowIso()]
+        [usernameDisplay, usernameNormalized, hashPassword(password), role, nowIso()]
       );
     } catch (error) {
       if (error.code === "SQLITE_CONSTRAINT") {
@@ -386,7 +395,7 @@ app.post(
       throw error;
     }
 
-    return res.status(201).json({ ok: true });
+    return res.status(201).json({ ok: true, role });
   })
 );
 
@@ -399,7 +408,7 @@ app.post(
 
     const user = await dbGet(
       `
-        SELECT id, username_display AS usernameDisplay, password_hash AS passwordHash
+        SELECT id, username_display AS usernameDisplay, password_hash AS passwordHash, role
         FROM users
         WHERE username_normalized = ?
       `,
@@ -417,7 +426,7 @@ app.post(
       nowIso()
     ]);
 
-    return res.json({ token, username: user.usernameDisplay });
+    return res.json({ token, username: user.usernameDisplay, role: normalizeRole(user.role) });
   })
 );
 
@@ -435,7 +444,7 @@ app.get(
   requireUser,
   asyncRoute(async (req, res) => {
     const completed = await getCompletedIds(req.user.userId);
-    return res.json({ username: req.user.usernameDisplay, completed });
+    return res.json({ username: req.user.usernameDisplay, role: req.user.role, completed });
   })
 );
 
@@ -518,6 +527,7 @@ app.post(
 
 app.post(
   "/api/admin/events",
+  requireUser,
   requireAdmin,
   asyncRoute(async (req, res) => {
     const title = String(req.body?.title || "").trim();
@@ -550,6 +560,7 @@ app.post(
 
 app.patch(
   "/api/admin/events/:id",
+  requireUser,
   requireAdmin,
   asyncRoute(async (req, res) => {
     const current = await dbGet("SELECT id, title, type, due_date FROM events WHERE id = ?", [req.params.id]);
@@ -601,6 +612,7 @@ app.patch(
 
 app.delete(
   "/api/admin/events/:id",
+  requireUser,
   requireAdmin,
   asyncRoute(async (req, res) => {
     const existing = await dbGet("SELECT id, title, type, due_date FROM events WHERE id = ?", [req.params.id]);

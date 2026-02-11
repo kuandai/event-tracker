@@ -38,6 +38,7 @@ export async function initDatabase(filename) {
       username_display TEXT NOT NULL,
       username_normalized TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
       created_at TEXT NOT NULL
     );
 
@@ -70,6 +71,22 @@ export async function initDatabase(filename) {
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_completions_user_id ON completions(user_id);
   `);
+
+  await ensureUserRoleColumn();
+}
+
+async function ensureUserRoleColumn() {
+  const columns = await all("PRAGMA table_info(users)");
+  const hasRoleColumn = columns.some((column) => column.name === "role");
+  if (!hasRoleColumn) {
+    await run("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+  }
+  await run("UPDATE users SET role = 'user' WHERE role IS NULL OR TRIM(role) = ''");
+
+  const adminCountRow = await get("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'");
+  if (Number(adminCountRow?.count || 0) === 0) {
+    await run("UPDATE users SET role = 'admin' WHERE id = (SELECT id FROM users ORDER BY id LIMIT 1)");
+  }
 }
 
 export function run(sql, params = []) {

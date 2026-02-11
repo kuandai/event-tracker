@@ -36,10 +36,21 @@
             </span>
             <span class="nav-label">Event Tracker</span>
           </a>
+
+          <button id="managementNavItem" class="nav-item nav-item-button" type="button" hidden>
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path
+                  d="M4 5h16a1 1 0 0 1 1 1v4H3V6a1 1 0 0 1 1-1zm-1 7h8v7H4a1 1 0 0 1-1-1v-6zm10 0h8v6a1 1 0 0 1-1 1h-7v-7z"
+                />
+              </svg>
+            </span>
+            <span class="nav-label">Management</span>
+          </button>
         </nav>
 
         <div class="sidebar-footer">
-          <button id="settingsTrigger" class="nav-item sidebar-settings" type="button" aria-label="Open settings">
+          <button id="settingsTrigger" class="nav-item nav-item-button" type="button" aria-label="Open settings">
             <span class="nav-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false">
                 <path
@@ -58,7 +69,7 @@
             <h1 class="page-title">Event Tracker</h1>
           </div>
 
-          <button id="authTrigger" class="profile-button" type="button" aria-label="Sign in">
+          <button id="authTrigger" class="profile-button" type="button" aria-label="Sign in" aria-haspopup="menu">
             <span class="profile-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false">
                 <path
@@ -67,6 +78,11 @@
               </svg>
             </span>
             <span id="authTriggerLabel">Sign in</span>
+            <span class="profile-caret" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M7 10l5 5 5-5z" />
+              </svg>
+            </span>
           </button>
         </header>
 
@@ -162,7 +178,26 @@
 
         <div class="auth-footer">
           <button id="authModeSwitch" class="auth-link" type="button">Create account instead</button>
-          <button id="authLogout" class="auth-link" type="button" hidden>Sign out</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="profileMenuOverlay" class="profile-menu-overlay" hidden>
+      <section
+        class="profile-menu-panel"
+        id="profileMenuPanel"
+        role="menu"
+        aria-label="User profile menu"
+      >
+        <header class="profile-menu-head">
+          <p id="profileMenuUsername" class="profile-menu-username"></p>
+          <p id="profileMenuRole" class="profile-menu-role"></p>
+        </header>
+
+        <div class="profile-menu-items">
+          <button id="profileSignOutBtn" class="profile-menu-item danger" type="button" role="menuitem">
+            Sign out
+          </button>
         </div>
       </section>
     </div>
