@@ -9,13 +9,25 @@ const VALID_AUTH_MODE = new Set(["login", "signup"]);
 const VALID_USER_ROLE = new Set(["admin", "user"]);
 const THEME_KEY = "themePreference";
 const VALID_THEME_MODE = new Set(["light", "dark", "system"]);
+const VIEW_EVENTS = "events";
+const VIEW_MANAGEMENT = "management";
 
 const scopeButtons = Array.from(document.querySelectorAll(".scope-btn"));
 const typeButtons = Array.from(document.querySelectorAll(".type-chip"));
+const eventsNavItem = document.getElementById("eventsNavItem");
 const eventList = document.getElementById("eventList");
 const eventStatus = document.getElementById("eventStatus");
 const loadMoreBtn = document.getElementById("loadMoreBtn");
 const managementNavItem = document.getElementById("managementNavItem");
+const eventView = document.getElementById("eventView");
+const managementView = document.getElementById("managementView");
+const managementForm = document.getElementById("managementForm");
+const managementTitleInput = document.getElementById("managementTitle");
+const managementTypeInput = document.getElementById("managementType");
+const managementDueDateInput = document.getElementById("managementDueDate");
+const managementSubmit = document.getElementById("managementSubmit");
+const managementStatus = document.getElementById("managementStatus");
+const managementList = document.getElementById("managementList");
 const authTrigger = document.getElementById("authTrigger");
 const authTriggerLabel = document.getElementById("authTriggerLabel");
 const authOverlay = document.getElementById("authOverlay");
@@ -48,6 +60,20 @@ const eventState = {
   isLoading: false,
   isLoadingMore: false,
   error: ""
+};
+
+const viewState = {
+  active: VIEW_EVENTS
+};
+
+const managementState = {
+  items: [],
+  isLoading: false,
+  isSubmitting: false,
+  error: "",
+  feedbackText: "",
+  feedbackTone: "",
+  hasLoaded: false
 };
 
 const authState = {
@@ -260,7 +286,61 @@ function renderProfileMenu() {
 
 function renderManagementNav() {
   if (!managementNavItem) return;
-  managementNavItem.hidden = !authState.username || authState.role !== "admin";
+  const isAdmin = Boolean(authState.username) && authState.role === "admin";
+  managementNavItem.hidden = !isAdmin;
+
+  if (!isAdmin && viewState.active === VIEW_MANAGEMENT) {
+    viewState.active = VIEW_EVENTS;
+    renderActiveView();
+    return;
+  }
+
+  renderSidebarSelection();
+}
+
+function renderSidebarSelection() {
+  if (eventsNavItem) {
+    const isEventsActive = viewState.active === VIEW_EVENTS;
+    eventsNavItem.classList.toggle("is-active", isEventsActive);
+    eventsNavItem.setAttribute("aria-current", isEventsActive ? "page" : "false");
+  }
+
+  if (managementNavItem) {
+    const isManagementActive = viewState.active === VIEW_MANAGEMENT;
+    managementNavItem.classList.toggle("is-active", isManagementActive);
+    managementNavItem.setAttribute("aria-current", isManagementActive ? "page" : "false");
+  }
+}
+
+function renderActiveView() {
+  if (eventView) {
+    eventView.hidden = viewState.active !== VIEW_EVENTS;
+  }
+  if (managementView) {
+    managementView.hidden = viewState.active !== VIEW_MANAGEMENT;
+  }
+  renderSidebarSelection();
+}
+
+function setActiveView(nextView) {
+  if (nextView !== VIEW_EVENTS && nextView !== VIEW_MANAGEMENT) {
+    return;
+  }
+
+  if (nextView === VIEW_MANAGEMENT && (!authState.username || authState.role !== "admin")) {
+    return;
+  }
+
+  if (viewState.active === nextView) {
+    return;
+  }
+
+  viewState.active = nextView;
+  renderActiveView();
+
+  if (nextView === VIEW_MANAGEMENT && !managementState.hasLoaded) {
+    fetchManagementEvents();
+  }
 }
 
 function setAuthMode(mode) {
@@ -664,6 +744,218 @@ async function fetchEvents(options = {}) {
   }
 }
 
+function setManagementFeedback(text, tone = "") {
+  managementState.feedbackText = text;
+  managementState.feedbackTone = tone;
+}
+
+function renderManagementStatus() {
+  if (!managementStatus) return;
+
+  managementStatus.classList.remove("error", "success");
+
+  if (managementState.error) {
+    managementStatus.textContent = managementState.error;
+    managementStatus.classList.add("error");
+    return;
+  }
+
+  if (managementState.isLoading && managementState.items.length === 0) {
+    managementStatus.textContent = "Loading managed events...";
+    return;
+  }
+
+  if (managementState.feedbackText) {
+    managementStatus.textContent = managementState.feedbackText;
+    if (managementState.feedbackTone) {
+      managementStatus.classList.add(managementState.feedbackTone);
+    }
+    return;
+  }
+
+  const count = managementState.items.length;
+  const noun = count === 1 ? "event" : "events";
+  managementStatus.textContent = `${count} managed ${noun}.`;
+}
+
+function createManagementEventItem(event) {
+  const item = document.createElement("li");
+  item.className = "management-item";
+
+  const head = document.createElement("div");
+  head.className = "management-item-head";
+
+  const title = document.createElement("h3");
+  title.className = "management-item-title";
+  title.textContent = event.title;
+
+  const typeBadge = document.createElement("span");
+  typeBadge.className = "event-type-badge";
+  typeBadge.textContent = formatEventType(event.type);
+
+  head.append(title, typeBadge);
+
+  const dueDate = document.createElement("p");
+  dueDate.className = "management-item-meta";
+  dueDate.textContent = `Due ${formatDueDate(event.dueDate)}`;
+
+  const actions = document.createElement("div");
+  actions.className = "management-item-actions";
+
+  const deleteButton = document.createElement("button");
+  deleteButton.className = "management-delete-btn";
+  deleteButton.type = "button";
+  deleteButton.dataset.action = "delete";
+  deleteButton.dataset.eventId = String(event.id);
+  deleteButton.textContent = "Delete";
+  deleteButton.disabled = managementState.isSubmitting;
+
+  actions.append(deleteButton);
+  item.append(head, dueDate, actions);
+  return item;
+}
+
+function renderManagementList() {
+  if (!managementList) return;
+  managementList.innerHTML = "";
+
+  if (managementState.isLoading && managementState.items.length === 0) {
+    managementList.appendChild(createStateMessageItem("Loading management list..."));
+    return;
+  }
+
+  if (managementState.error && managementState.items.length === 0) {
+    managementList.appendChild(createStateMessageItem(managementState.error, "error"));
+    return;
+  }
+
+  if (managementState.items.length === 0) {
+    managementList.appendChild(createStateMessageItem("No events yet. Add your first event above."));
+    return;
+  }
+
+  managementState.items.forEach((event) => {
+    managementList.appendChild(createManagementEventItem(event));
+  });
+}
+
+function renderManagementView() {
+  renderManagementStatus();
+  renderManagementList();
+
+  if (managementSubmit) {
+    managementSubmit.disabled = managementState.isSubmitting;
+    managementSubmit.textContent = managementState.isSubmitting ? "Saving..." : "Add Event";
+  }
+
+  if (managementTitleInput) managementTitleInput.disabled = managementState.isSubmitting;
+  if (managementTypeInput) managementTypeInput.disabled = managementState.isSubmitting;
+  if (managementDueDateInput) managementDueDateInput.disabled = managementState.isSubmitting;
+}
+
+async function fetchManagementEvents() {
+  if (!managementList || !managementStatus) {
+    return;
+  }
+
+  managementState.isLoading = true;
+  managementState.error = "";
+  renderManagementView();
+
+  try {
+    const payload = await requestJson("/api/events?scope=all&limit=100", {
+      method: "GET",
+      withJson: false,
+      withAuth: false
+    });
+    managementState.items = Array.isArray(payload.items) ? payload.items : [];
+    managementState.hasLoaded = true;
+  } catch (error) {
+    managementState.error = error instanceof Error ? error.message : "Failed to load managed events.";
+  } finally {
+    managementState.isLoading = false;
+    renderManagementView();
+  }
+}
+
+async function handleManagementSubmit(event) {
+  event.preventDefault();
+
+  if (!authState.token || authState.role !== "admin") {
+    managementState.error = "Admin sign-in required.";
+    renderManagementView();
+    return;
+  }
+
+  const title = String(managementTitleInput?.value || "").trim();
+  const type = String(managementTypeInput?.value || "").trim().toLowerCase();
+  const dueDate = String(managementDueDateInput?.value || "").trim();
+
+  if (!title || !type || !dueDate) {
+    managementState.error = "Title, type, and due date are required.";
+    renderManagementView();
+    return;
+  }
+
+  managementState.error = "";
+  managementState.isSubmitting = true;
+  setManagementFeedback("");
+  renderManagementView();
+
+  try {
+    await requestJson("/api/admin/events", {
+      method: "POST",
+      body: JSON.stringify({ title, type, dueDate })
+    });
+
+    if (managementTitleInput) {
+      managementTitleInput.value = "";
+      managementTitleInput.focus();
+    }
+    setManagementFeedback("Event created.", "success");
+    await fetchManagementEvents();
+    fetchEvents();
+  } catch (error) {
+    managementState.error = error instanceof Error ? error.message : "Failed to create event.";
+  } finally {
+    managementState.isSubmitting = false;
+    renderManagementView();
+  }
+}
+
+async function handleManagementDelete(eventId) {
+  const normalizedId = String(eventId || "").trim();
+  if (!normalizedId || managementState.isSubmitting) {
+    return;
+  }
+
+  if (!authState.token || authState.role !== "admin") {
+    managementState.error = "Admin sign-in required.";
+    renderManagementView();
+    return;
+  }
+
+  managementState.error = "";
+  managementState.isSubmitting = true;
+  setManagementFeedback("");
+  renderManagementView();
+
+  try {
+    await requestJson(`/api/admin/events/${encodeURIComponent(normalizedId)}`, {
+      method: "DELETE",
+      body: JSON.stringify({})
+    });
+    setManagementFeedback("Event deleted.", "success");
+    await fetchManagementEvents();
+    fetchEvents();
+  } catch (error) {
+    managementState.error = error instanceof Error ? error.message : "Failed to delete event.";
+  } finally {
+    managementState.isSubmitting = false;
+    renderManagementView();
+  }
+}
+
 function setScope(scope) {
   if (!VALID_SCOPE.has(scope) || scope === eventState.scope) {
     return;
@@ -683,6 +975,21 @@ function toggleTypeFilter(type) {
   }
 
   fetchEvents();
+}
+
+function initializeNavigationUi() {
+  if (eventsNavItem) {
+    eventsNavItem.addEventListener("click", (event) => {
+      event.preventDefault();
+      setActiveView(VIEW_EVENTS);
+    });
+  }
+
+  if (managementNavItem) {
+    managementNavItem.addEventListener("click", () => {
+      setActiveView(VIEW_MANAGEMENT);
+    });
+  }
 }
 
 function initializeEventView() {
@@ -708,6 +1015,35 @@ function initializeEventView() {
 
   renderEventView();
   fetchEvents();
+}
+
+function initializeManagementView() {
+  if (
+    !managementView ||
+    !managementForm ||
+    !managementTitleInput ||
+    !managementTypeInput ||
+    !managementDueDateInput ||
+    !managementList ||
+    !managementStatus
+  ) {
+    return;
+  }
+
+  managementForm.addEventListener("submit", handleManagementSubmit);
+  managementList.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    const deleteButton = target.closest("button[data-action='delete']");
+    if (!deleteButton) {
+      return;
+    }
+    handleManagementDelete(deleteButton.dataset.eventId);
+  });
+
+  renderManagementView();
 }
 
 function initializeAuthUi() {
@@ -814,8 +1150,11 @@ if (menuToggle) {
 
 initializeSidebarState();
 initializeTheme();
+initializeNavigationUi();
 initializeAuthUi();
 initializeProfileMenuUi();
 initializeSettingsUi();
 initializeAuthState();
 initializeEventView();
+initializeManagementView();
+renderActiveView();

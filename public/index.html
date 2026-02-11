@@ -26,7 +26,7 @@
         </div>
 
         <nav class="nav-list">
-          <a class="nav-item is-active" href="#" aria-current="page">
+          <a id="eventsNavItem" class="nav-item is-active" href="#" aria-current="page">
             <span class="nav-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false">
                 <path
@@ -37,7 +37,7 @@
             <span class="nav-label">Event Tracker</span>
           </a>
 
-          <button id="managementNavItem" class="nav-item nav-item-button" type="button" hidden>
+          <button id="managementNavItem" class="nav-item nav-item-button" type="button" aria-current="false" hidden>
             <span class="nav-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false">
                 <path
@@ -118,6 +118,42 @@
             <div class="event-actions">
               <button class="load-more-btn" id="loadMoreBtn" type="button">Load more</button>
             </div>
+          </section>
+
+          <section class="panel management-view" id="managementView" hidden>
+            <header class="management-head">
+              <div>
+                <h2 class="management-title">Management</h2>
+                <p class="management-subtitle">Create and maintain official organization events.</p>
+              </div>
+            </header>
+
+            <form id="managementForm" class="management-form">
+              <label class="management-field">
+                Title
+                <input id="managementTitle" name="title" type="text" maxlength="120" required />
+              </label>
+
+              <label class="management-field">
+                Type
+                <select id="managementType" name="type" required>
+                  <option value="homework">Homework</option>
+                  <option value="quiz">Quiz</option>
+                  <option value="assignment">Assignment</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+
+              <label class="management-field">
+                Due Date
+                <input id="managementDueDate" name="dueDate" type="date" required />
+              </label>
+
+              <button id="managementSubmit" class="management-submit" type="submit">Add Event</button>
+            </form>
+
+            <p id="managementStatus" class="management-status" role="status" aria-live="polite"></p>
+            <ul id="managementList" class="management-list" aria-label="Managed event list"></ul>
           </section>
         </main>
       </div>
